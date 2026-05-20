@@ -483,6 +483,7 @@
   let pendingChatImageBase64 = null;
   let pendingChatImageMime = 'image/png';
   let renderedChatMessageKeys = new Set();
+  let chatMessageArray = [];
   
   document.addEventListener('DOMContentLoaded', () => {
     initializeChatUser();
@@ -573,6 +574,7 @@
     groupChatState.participants = [];
     groupChatState.typingUsers.clear();
     groupChatState.seenEventKeys.clear();
+    chatMessageArray = [];
     refreshParticipants();
     refreshTypingIndicator();
   }
@@ -692,13 +694,19 @@
     return `data:image/png;base64,${image}`;
   }
 
-  function appendSingleMessage(msg) {
+  function appendSingleMessage(msg, options = {}) {
     const chatMessages = document.getElementById('chatMessages');
     let emptyState = document.getElementById('chatEmptyState');
     const messageKey = getChatMessageKey(msg);
 
     if (!chatMessages || renderedChatMessageKeys.has(messageKey)) {
       return;
+    }
+
+    const explicitIndex = Number.isInteger(options.index) ? options.index : null;
+    const messageIndex = explicitIndex ?? chatMessageArray.length;
+    if (explicitIndex === null) {
+      chatMessageArray.push(msg);
     }
 
     if (!emptyState) {
@@ -711,6 +719,9 @@
     emptyState.classList.add('hidden');
 
     const wrapper = document.createElement('div');
+    if (Number.isInteger(messageIndex)) {
+      wrapper.dataset.msgIndex = String(messageIndex);
+    }
 
     const header = document.createElement('div');
     header.className = 'flex items-baseline gap-2 mb-1';
@@ -727,6 +738,19 @@
 
     header.appendChild(nameEl);
     header.appendChild(timeEl);
+    if (senderName === currentUserDisplayName) {
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'ml-auto text-gray-500 hover:text-red-400 text-sm leading-none px-1';
+      deleteBtn.title = 'Delete message';
+      deleteBtn.setAttribute('aria-label', 'Delete message');
+      deleteBtn.textContent = '×';
+      deleteBtn.onclick = () => {
+        const idx = Number.parseInt(wrapper.dataset.msgIndex, 10);
+        deleteChatMessage(idx);
+      };
+      header.appendChild(deleteBtn);
+    }
     wrapper.appendChild(header);
 
     if (msg.message) {
@@ -754,6 +778,7 @@
     let emptyState = document.getElementById('chatEmptyState');
     chatMessages.innerHTML = '';
     renderedChatMessageKeys = new Set();
+    chatMessageArray = Array.isArray(messages) ? messages.slice() : [];
 
     if (!emptyState) {
       emptyState = document.createElement('div');
@@ -768,7 +793,7 @@
       return;
     }
 
-    messages.forEach(appendSingleMessage);
+    messages.forEach((msg, idx) => appendSingleMessage(msg, { index: idx }));
   }
 
   async function fetchChatMessages() {
@@ -789,6 +814,36 @@
       });
     } catch (err) {
       console.error('Chat fetch failed', err);
+    }
+  }
+
+  async function deleteChatMessage(index) {
+    if (!activeChatGroupId) return;
+    const parsedIndex = Number.parseInt(index, 10);
+    if (!Number.isInteger(parsedIndex) || parsedIndex < 0) return;
+    if (!window.confirm('Delete this message? This cannot be undone.')) return;
+    try {
+      const res = await fetch(
+        `${javaURI}/api/chat/${activeChatGroupId}/${parsedIndex}`,
+        { ...fetchOptions, method: 'DELETE' }
+      );
+      if (res.ok) {
+        await fetchChatMessages();
+        return;
+      }
+      if (res.status === 401) {
+        alert('You need to be signed in.');
+      } else if (res.status === 403) {
+        alert('You can only delete your own messages.');
+      } else if (res.status === 404) {
+        alert('Message no longer exists. Refreshing chat.');
+        await fetchChatMessages();
+      } else {
+        alert('Failed to delete message.');
+      }
+    } catch (err) {
+      console.error('Delete chat message failed', err);
+      alert('Failed to delete message.');
     }
   }
 
